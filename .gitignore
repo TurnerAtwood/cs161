@@ -1,0 +1,12 @@
+.cvsignore
+CHANGES
+COPYING
+Makefile
+bin/
+defs.mk
+defs.mk.sample
+lib/
+man/
+mk/
+sbin/
+testbin/
