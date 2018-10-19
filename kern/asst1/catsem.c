@@ -7,43 +7,26 @@
  * this file.
  */
 
-
-/*
- * 
- * Includes
- *
- */
-
 #include <types.h>
 #include <lib.h>
 #include <test.h>
 #include <thread.h>
-
-
-/*
- * 
- * Constants
- *
- */
-
-/*
- * Number of food bowls.
- */
+#include <synch.h>
 
 #define NFOODBOWLS 2
-
-/*
- * Number of cats.
- */
-
 #define NCATS 6
-
-/*
- * Number of mice.
- */
-
 #define NMICE 2
+#define SLEEPTIME 1
 
+static struct semaphore* animal_done;
+static struct semaphore* other_done;
+static struct semaphore* mutex;
+static struct semaphore* cats_queue;
+static struct semaphore* mice_queue;
+static volatile int all_dishes_available;
+static volatile int cat_wait_count;
+static volatile int no_other_eat;
+static volatile int mice_wait_count;
 
 /*
  * 
@@ -69,15 +52,75 @@
 
 static
 void
-catsem(void * unusedpointer, 
-       unsigned long catnumber)
+catsem( void * unusedpointer,
+	unsigned long catnumber)
 {
-        /*
-         * Avoid unused variable warnings.
-         */
+	(void) unusedpointer;
+	int first_cat_eat = 0;
+	int another_cat_eat = 0;	
 
-        (void) unusedpointer;
-        (void) catnumber;
+	P(mutex);
+	if (all_dishes_available == 1) {
+		all_dishes_available = 0;
+		V(cats_queue);
+	}
+	cat_wait_count++;
+	V(mutex);
+
+	P(cats_queue);
+	kprintf("Cat (%d) in the kitchen.\n", catnumber);
+
+	if (no_other_eat == 1) {
+		no_other_eat = 0;
+		first_cat_eat = 1;
+	}
+	else {
+		first_cat_eat = 0;
+	}
+	
+	if (first_cat_eat == 1) {
+		P(mutex);
+		if (cat_wait_count > 1) {
+			another_cat_eat = 1;
+			V(cats_queue);
+		}
+		V(mutex);
+	}	
+
+	kprintf("Cat (%d) eating.\n", catnumber);
+	clocksleep(SLEEPTIME);
+	kprintf("Cat (%d) done eating.\n", catnumber);
+
+	P(mutex);
+	cat_wait_count--;
+	V(mutex);
+
+	if (first_cat_eat == 1) {
+		if (another_cat_eat == 1) {
+			P(other_done);
+		}
+		
+		kprintf("First cat (%d) is leaving the kitchen.\n", catnumber);
+		no_other_eat = 1;
+
+		P(mutex);
+		if (mice_wait_count > 0) {
+			V(mice_queue);
+		}
+		else if (cat_wait_count > 0){
+			V(cats_queue);
+		}
+		else {
+			all_dishes_available = 1;
+		}
+		V(mutex);
+	}
+	else {
+		kprintf("Other cat (%d) is leaving the kitchen.\n", catnumber);
+		V(other_done);	
+	}
+	
+	V(animal_done);
 }
         
 
@@ -99,15 +142,75 @@ catsem(void * unusedpointer,
 
 static
 void
-mousesem(void * unusedpointer, 
-         unsigned long mousenumber)
+mousesem(void * unusedpointer,
+	unsigned long mousenumber)
 {
-        /*
-         * Avoid unused variable warnings.
-         */
+	(void) unusedpointer;
+ 	int first_mouse_eat = 0;
+	int another_mouse_eat = 0;	
 
-        (void) unusedpointer;
-        (void) mousenumber;
+	P(mutex);
+	if (all_dishes_available == 1) {
+		all_dishes_available = 0;
+		V(mice_queue);
+	}
+	mice_wait_count++;
+	V(mutex);
+
+	P(mice_queue);
+	kprintf("Mouse (%d) in the kitchen.\n", mousenumber);
+
+	if (no_other_eat == 1) {
+		no_other_eat = 0;
+		first_mouse_eat = 1;
+	}
+	else {
+		first_mouse_eat = 0;
+	}
+	
+	if (first_mouse_eat == 1) {
+		P(mutex);
+		if (mice_wait_count > 1) {
+			another_mouse_eat = 1;
+			V(mice_queue);
+		}
+		V(mutex);
+	}	
+	
+	kprintf("Mouse (%d) eating.\n", mousenumber);
+	clocksleep(SLEEPTIME);
+	kprintf("Mouse (%d) done eating.\n", mousenumber);
+
+	P(mutex);
+	mice_wait_count--;
+	V(mutex);
+
+	if (first_mouse_eat == 1) {
+		if (another_mouse_eat == 1) {
+			P(other_done);
+		}
+		
+		kprintf("First mouse (%d) is leaving the kitchen.\n", mousenumber);
+		no_other_eat = 1;
+
+		P(mutex);
+		if (cat_wait_count > 0) {
+			V(cats_queue);
+		}
+		else if (mice_wait_count > 0){
+			V(mice_queue);
+		}
+		else {
+			all_dishes_available = 1;
+		}
+		V(mutex);
+	}
+	else {
+		kprintf("Other mouse (%d) is leaving the kitchen.\n", mousenumber);
+		V(other_done);	
+	}
+	
+	V(animal_done);
 }
 
 
@@ -138,7 +241,24 @@ catmousesem(int nargs,
 
         (void) nargs;
         (void) args;
-   
+	
+	/*
+ 	 * Initialize all shared resources
+ 	 */
+	
+	all_dishes_available = 1;
+	int totalAnimals = NCATS + NMICE;
+	animal_done = sem_create("animal_done", 0);
+	other_done = sem_create("other_done", 0);
+	mutex = sem_create("mutex", 1);
+	
+	cats_queue = sem_create("cats_queue", 0); 
+	cat_wait_count = 0;
+	no_other_eat = 1; 
+
+	mice_queue = sem_create("mice_queue", 0);
+	mice_wait_count = 0;
+
         /*
          * Start NCATS catsem() threads.
          */
@@ -188,7 +308,12 @@ catmousesem(int nargs,
                               );
                 }
         }
+	
+	for (index = 0; index < totalAnimals; index++) {
+		P(animal_done);
+	}
 
+	kprintf("\nALL ANIMALS DONE\n");
         return 0;
 }
 
