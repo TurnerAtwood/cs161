@@ -18,6 +18,10 @@
 #define NMICE 2
 #define SLEEPTIME 1
 
+/*
+ * Global variable definitons
+ */
+
 static struct semaphore* animal_done;
 static struct semaphore* other_done;
 static struct semaphore* mutex;
@@ -58,7 +62,8 @@ catsem( void * unusedpointer,
 	(void) unusedpointer;
 	int first_cat_eat = 0;
 	int another_cat_eat = 0;	
-
+	
+	// If the room is empty, let yourself in
 	P(mutex);
 	if (all_dishes_available == 1) {
 		all_dishes_available = 0;
@@ -67,9 +72,11 @@ catsem( void * unusedpointer,
 	cat_wait_count++;
 	V(mutex);
 
+	// Wait to be let in
 	P(cats_queue);
 	kprintf("Cat (%d) in the kitchen.\n", catnumber);
-
+	
+	// Check and store whether or not you are the first cat
 	if (no_other_eat == 1) {
 		no_other_eat = 0;
 		first_cat_eat = 1;
@@ -78,6 +85,7 @@ catsem( void * unusedpointer,
 		first_cat_eat = 0;
 	}
 	
+	// The first cat lets in another cat if possible
 	if (first_cat_eat == 1) {
 		P(mutex);
 		if (cat_wait_count > 1) {
@@ -86,16 +94,20 @@ catsem( void * unusedpointer,
 		}
 		V(mutex);
 	}	
-
+	
+	// Sleep for a bit
 	kprintf("Cat (%d) eating.\n", catnumber);
 	clocksleep(SLEEPTIME);
 	kprintf("Cat (%d) done eating.\n", catnumber);
 
+	// Prepare to exit the room
 	P(mutex);
 	cat_wait_count--;
 	V(mutex);
 
+	// First cat
 	if (first_cat_eat == 1) {
+		// Wait for the other cat if necessary
 		if (another_cat_eat == 1) {
 			P(other_done);
 		}
@@ -103,6 +115,7 @@ catsem( void * unusedpointer,
 		kprintf("First cat (%d) is leaving the kitchen.\n", catnumber);
 		no_other_eat = 1;
 
+		// Try to let in waiting mice, then waiting cats, else just open the room
 		P(mutex);
 		if (mice_wait_count > 0) {
 			V(mice_queue);
@@ -115,11 +128,13 @@ catsem( void * unusedpointer,
 		}
 		V(mutex);
 	}
+	// Other cat
 	else {
 		kprintf("Other cat (%d) is leaving the kitchen.\n", catnumber);
 		V(other_done);	
 	}
 	
+	// Signal to the driver that an animal has finished
 	V(animal_done);
 }
         
@@ -149,6 +164,7 @@ mousesem(void * unusedpointer,
  	int first_mouse_eat = 0;
 	int another_mouse_eat = 0;	
 
+	// If the room is empty, let yourself in
 	P(mutex);
 	if (all_dishes_available == 1) {
 		all_dishes_available = 0;
@@ -157,9 +173,11 @@ mousesem(void * unusedpointer,
 	mice_wait_count++;
 	V(mutex);
 
+	// Wait to be let in
 	P(mice_queue);
 	kprintf("Mouse (%d) in the kitchen.\n", mousenumber);
 
+	// Check and store whether or not you are the first mouse
 	if (no_other_eat == 1) {
 		no_other_eat = 0;
 		first_mouse_eat = 1;
@@ -168,6 +186,7 @@ mousesem(void * unusedpointer,
 		first_mouse_eat = 0;
 	}
 	
+	// The first mouse lets in another mouse if possible
 	if (first_mouse_eat == 1) {
 		P(mutex);
 		if (mice_wait_count > 1) {
@@ -177,15 +196,19 @@ mousesem(void * unusedpointer,
 		V(mutex);
 	}	
 	
+	// Sleeep for a bit
 	kprintf("Mouse (%d) eating.\n", mousenumber);
 	clocksleep(SLEEPTIME);
 	kprintf("Mouse (%d) done eating.\n", mousenumber);
 
+	// Prepare to exit the room
 	P(mutex);
 	mice_wait_count--;
 	V(mutex);
 
+	// First mouse
 	if (first_mouse_eat == 1) {
+		// Wait for the other mouse if necessary
 		if (another_mouse_eat == 1) {
 			P(other_done);
 		}
@@ -193,6 +216,7 @@ mousesem(void * unusedpointer,
 		kprintf("First mouse (%d) is leaving the kitchen.\n", mousenumber);
 		no_other_eat = 1;
 
+		// Try to let in waiting cats, then waiting mice, else just open the room
 		P(mutex);
 		if (cat_wait_count > 0) {
 			V(cats_queue);
@@ -205,11 +229,13 @@ mousesem(void * unusedpointer,
 		}
 		V(mutex);
 	}
+	// Other mouse
 	else {
 		kprintf("Other mouse (%d) is leaving the kitchen.\n", mousenumber);
 		V(other_done);	
 	}
 	
+	// Signal to the driver that an animal has finished
 	V(animal_done);
 }
 
@@ -233,7 +259,7 @@ int
 catmousesem(int nargs,
             char ** args)
 {
-        int index, error;
+        int index, error, totalAnimals;
    
         /*
          * Avoid unused variable warnings.
@@ -241,13 +267,13 @@ catmousesem(int nargs,
 
         (void) nargs;
         (void) args;
+	totalAnimals = NCATS + NMICE;
 	
 	/*
- 	 * Initialize all shared resources
+ 	 * Instantiate all shared resources
  	 */
 	
 	all_dishes_available = 1;
-	int totalAnimals = NCATS + NMICE;
 	animal_done = sem_create("animal_done", 0);
 	other_done = sem_create("other_done", 0);
 	mutex = sem_create("mutex", 1);
@@ -316,7 +342,6 @@ catmousesem(int nargs,
 	kprintf("\nALL ANIMALS DONE\n");
         return 0;
 }
-
 
 /*
  * End of catsem.c
